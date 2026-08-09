@@ -1,17 +1,29 @@
-#include <mcp_can.h>
-#include <string.h>
-#include <stdio.h>
-#include <SPI.h>
-
 /* SLCAN protocol implementation - bridges vehicle CAN bus to */
 /* Linux SocketCAN (slcand) over serial/USB */
 
 /* @Author: Muhammed Hüseyin Özkaya */
 
+// Debug check mcp_can.h library
+#ifdef DEBUG_MODE
+#undef DEBUG_MODE
+#endif
+/* Turn off debug for the stable conversation with slcan */
+#define DEBUG_MODE 0
+
+/* Controls MCP_LOOPBACK mode */
+#define LOOPBACK_MODE 0
+
+#include <mcp_can.h>
+#include <mcp_can_dfs.h>
+#include <string.h>
+#include <stdio.h>
+#include <SPI.h>
+
 /* UPDATE THIS VALUES ACCORDING TO YOUR HARDWARE */
 #define SERIAL_BAUDRATE 115200
 #define MCP2515_CRYSTAL_SPEED MCP_8MHZ
 
+// MCP2515 INT pin
 #define CAN0_INT 2
 // Create a new CAN object instance, CS pin default 10
 MCP_CAN CAN0(10);
@@ -54,7 +66,7 @@ void loop(){
   }
 
   while(is_canbus_open == true){
-    // Read CAN messages from the car
+    // Read CAN messages from the MCP2515 controller
     if(!digitalRead(CAN0_INT)){
       CAN0.readMsgBuf(&rxId, &len, rxBuf);
 
@@ -87,8 +99,11 @@ void lawicel_parser(){
   rx_string.toCharArray(sl_rx_buffer, sizeof(sl_rx_buffer));
 
   if(!strcmp(sl_rx_buffer,"O")){
+#if LOOPBACK_MODE
+    CAN0.setMode(MCP_LOOPBACK);
+#else
     CAN0.setMode(MCP_NORMAL);
-    // CAN0.setMode(MCP_LOOPBACK);
+#endif
     is_canbus_open = true;
     Serial.write('\r'); // ACK to slcand
   }
