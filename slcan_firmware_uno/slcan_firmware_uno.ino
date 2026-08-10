@@ -30,6 +30,8 @@ MCP_CAN CAN0(10);
 
 // Default CAN Bus speed
 static unsigned int canbus_speed = CAN_500KBPS;
+// Determine CAN frame type
+static bool can_tx_is_ext;
 
 // CAN bus channel control
 static bool CAN_SEND_FLAG;
@@ -66,7 +68,7 @@ void loop(){
   // Read CAN messages from the MCP2515 controller
   if(CANBUS_OPEN == true){
     if(CAN_SEND_FLAG){
-      byte status = CAN0.sendMsgBuf(can_tx_id, 0, can_tx_len, can_tx_buf);
+      byte status = CAN0.sendMsgBuf(can_tx_id, can_tx_is_ext, can_tx_len, can_tx_buf);
       if(status != CAN_OK)
         Serial.write('\a');
       CAN_SEND_FLAG = false;
@@ -181,6 +183,10 @@ void frame_to_serialcan(bool is_ext){
 void serialcan_to_frame(bool is_ext){
   uint32_t tmp_id = 0;
   uint8_t offset = (is_ext) ? 0x5 : 0x0;
+
+  // Set global extended flag
+  can_tx_is_ext = is_ext;
+
   // Convert ID and payload length to frames
   for(int i=1; i <= 3+offset; ++i){
     tmp_id <<= 4;
