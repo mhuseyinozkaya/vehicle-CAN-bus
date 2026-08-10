@@ -11,12 +11,11 @@
 #define DEBUG_MODE 0
 
 /* Controls MCP_LOOPBACK mode */
-#define LOOPBACK_MODE 0
+#define LOOPBACK_MODE 1
 
 #include <mcp_can.h>
 #include <mcp_can_dfs.h>
 #include <string.h>
-#include <stdio.h>
 #include <SPI.h>
 
 /* UPDATE THIS VALUES ACCORDING TO YOUR HARDWARE */
@@ -33,13 +32,13 @@ MCP_CAN CAN0(10);
 static unsigned int canbus_speed = CAN_500KBPS;
 
 // CAN bus channel control
-static bool is_canbus_open;
-static bool cansend_flag;
+static bool CAN_SEND_FLAG;
+static bool CANBUS_OPEN;
 
 // Receive buffer for the handle commands from serial usb
-char sl_rx_buffer[32];
+char sl_rx_buffer[30];
 // Transmit buffer for the send serial port in lawicel format
-char sl_tx_buffer[32];
+char sl_tx_buffer[30];
 
 // Storage for received CAN frames from the CAN module
 long unsigned int rxId;
@@ -54,49 +53,50 @@ unsigned char can_tx_buf[8];
 void setup(){
   Serial.begin(SERIAL_BAUDRATE);
   pinMode(CAN0_INT,INPUT_PULLUP);
-  is_canbus_open = false;
-  cansend_flag = false;
+  CANBUS_OPEN = false;
+  CAN_SEND_FLAG = false;
 }
 
 void loop(){
   // Listen messages from serial usb port
-  /* Waiting in idle for handle slcan commands */
+  // If computer sends an message then process it
   if(Serial.available()){
     lawicel_parser();
   }
-
-  while(is_canbus_open == true){
-    // Read CAN messages from the MCP2515 controller
-    if(!digitalRead(CAN0_INT)){
-      CAN0.readMsgBuf(&rxId, &len, rxBuf);
-
-      // Standart CAN frames in lawicel format
-      sprintf(sl_tx_buffer, "t%.3lX%1d", rxId, len);
-      Serial.write(sl_tx_buffer);
-
-      // Write CAN data buffer to serial port
-      for(byte i = 0; i<len; i++){
-        sprintf(sl_tx_buffer, "%.2X", rxBuf[i]);
-        Serial.write(sl_tx_buffer);
-      }
-      Serial.write('\r'); /* ACK to slcand */
-    }
-    // If computer sends an message then process it
-    if(Serial.available()){
-      lawicel_parser();
-    }
-    if(cansend_flag){
+  // Read CAN messages from the MCP2515 controller
+  if(CANBUS_OPEN == true){
+    if(CAN_SEND_FLAG){
       byte status = CAN0.sendMsgBuf(can_tx_id, 0, can_tx_len, can_tx_buf);
-      /* Harici bir LED takarak hata kodlarını donanım üzerinde göstermeye çalış slcan protokolünü bozmaması için atlandı */
-      cansend_flag = false;
+      if(status != CAN_OK)
+        Serial.write('\a');
+      CAN_SEND_FLAG = false;
+    }
+    if(!digitalRead(CAN0_INT)){
+      // Read CAN frames from module
+      CAN0.readMsgBuf(&rxId, &len, rxBuf);
+      frame_parser();
     }
   }
 }
 
+void frame_parser(){
+  // Extended CAN frames in serialcan format
+  if((rxId & 0x80000000) == CAN_IS_EXTENDED){
+    sl_tx_buffer[0] = 'T';
+    frame_to_serialcan(true);
+  }
+  // Standart CAN frames in serialcan format
+  else{
+    sl_tx_buffer[0] = 't';
+    frame_to_serialcan(false);
+  }
+  Serial.write(sl_tx_buffer);
+  Serial.write('\r'); /* ACK to slcand */
+}
+
 void lawicel_parser(){
-  /* Gelen Komutlar String nesnesi olarak alınıyor ve char dizisine dönüştürülüyor, sonradan optimizasyon sağlanabilir */
-  String rx_string = Serial.readStringUntil('\r');
-  rx_string.toCharArray(sl_rx_buffer, sizeof(sl_rx_buffer));
+
+  read_serial_port();
 
   if(!strcmp(sl_rx_buffer,"O")){
 #if LOOPBACK_MODE
@@ -104,16 +104,16 @@ void lawicel_parser(){
 #else
     CAN0.setMode(MCP_NORMAL);
 #endif
-    is_canbus_open = true;
+    CANBUS_OPEN = true;
     Serial.write('\r'); // ACK to slcand
   }
   else if(!strcmp(sl_rx_buffer,"C")){
-    is_canbus_open = false;
+    CANBUS_OPEN = false;
     Serial.write('\r'); // ACK to slcand
   }
   // Sets speed and initialize CAN bus
   else if(sl_rx_buffer[0] == 'S'){
-    int speed_rate = sl_rx_buffer[1] - '0';
+    int speed_rate = ascii_to_hex(sl_rx_buffer[1]);
     switch(speed_rate){
       case 8:
         canbus_speed = CAN_1000KBPS; break;
@@ -141,19 +141,86 @@ void lawicel_parser(){
       Serial.write('\a'); // Error happened, NACK to slcand
   }
   // Standart CAN frames received from the serial port
-  else if(sl_rx_buffer[0] == 't'){
-    // Save CAN ID and data length from received message
-    int tmp_len;
-    sscanf(sl_rx_buffer, "t%3lX%1d", &can_tx_id, &tmp_len);
-    can_tx_len = (unsigned char)tmp_len;
-
-    // And then read actual data and store in buffer
-    char* ptr = &sl_rx_buffer[5];
-    for(int i=0; i<can_tx_len; ++i){
-      sscanf(ptr,"%2hhx",&can_tx_buf[i]);
-      ptr += 2;
-    }
+  else if(sl_rx_buffer[0] == 'T'){
+    serialcan_to_frame(true);
     // If the message parsed successfully then switch the flag
-    cansend_flag = true;
+    CAN_SEND_FLAG = true;
+  }else if(sl_rx_buffer[0] == 't'){
+    serialcan_to_frame(false);
+    // If the message parsed successfully then switch the flag
+    CAN_SEND_FLAG = true;
   }
+}
+
+void frame_to_serialcan(bool is_ext){
+  uint32_t clean_id;
+  uint8_t offset, high_nibble, low_nibble;
+  if(is_ext){
+    offset = 0x5;
+    clean_id = rxId & 0x1FFFFFFF;
+  }else{
+    offset = 0x0;
+    clean_id = rxId & 0x7FF;
+  }
+  // Convert ID and payload length to serialcan
+  sl_tx_buffer[4+offset] = hex_to_ascii(len);
+  sl_tx_buffer[5+offset+(2*len)] = '\0';
+  for(int i=3+offset; 0 < i; --i){
+    sl_tx_buffer[i] = hex_to_ascii(clean_id & 0x0F);
+    clean_id >>= 4;
+  }
+  // Convert payload to serialcan format
+  for(int i=0; i<len; ++i){
+    high_nibble = (rxBuf[i] & 0xF0) >> 4;
+    low_nibble = rxBuf[i] & 0x0F;
+    sl_tx_buffer[(2*i)+5+offset] = hex_to_ascii(high_nibble);
+    sl_tx_buffer[(2*i)+6+offset] = hex_to_ascii(low_nibble);
+  }
+}
+
+void serialcan_to_frame(bool is_ext){
+  uint32_t tmp_id = 0;
+  uint8_t offset = (is_ext) ? 0x5 : 0x0;
+  // Convert ID and payload length to frames
+  for(int i=1; i <= 3+offset; ++i){
+    tmp_id <<= 4;
+    tmp_id += ascii_to_hex(sl_rx_buffer[i]);
+  }
+  can_tx_id = tmp_id;
+  can_tx_len = ascii_to_hex(sl_rx_buffer[4+offset]);
+  if(can_tx_len > 8){
+    Serial.write('\a');  // NACK for length overflow
+    return;
+  }
+  for(int i=0; i<can_tx_len; ++i){
+    unsigned char tmp_data = 0;
+    tmp_data += ascii_to_hex(sl_rx_buffer[(2*i)+5+offset]);
+    tmp_data <<= 4;
+    tmp_data += ascii_to_hex(sl_rx_buffer[(2*i)+6+offset]);
+    can_tx_buf[i] = tmp_data;
+  }
+}
+
+void read_serial_port(){
+  char recv_chr;
+  int i = 0;
+  while(i < sizeof(sl_rx_buffer) - 1){
+    if(Serial.available()){
+      recv_chr = Serial.read();
+      if(recv_chr == '\r') break;
+      sl_rx_buffer[i++] = recv_chr;
+    }
+  }
+  sl_rx_buffer[i] = '\0';
+}
+
+char hex_to_ascii(uint8_t c) {
+  return (c > 0x09) ? (c - 0x0A + 'A') : (c + 0x30);
+}
+
+char ascii_to_hex(char c){
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return 0;
 }
