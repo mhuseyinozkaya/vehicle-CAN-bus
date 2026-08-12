@@ -1,7 +1,21 @@
-/* SLCAN protocol implementation - bridges vehicle CAN bus to */
-/* Linux SocketCAN (slcand) over serial/USB */
-
-/* @Author: Muhammed Hüseyin Özkaya */
+/*
+ * SLCAN protocol implementation for MCP2515 - bridges vehicle CAN bus
+ * to Linux SocketCAN (slcand) over serial/USB.
+ * Copyright (C) 2026  Muhammed Hüseyin Özkaya
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
 // Debug check mcp_can.h library
 #ifdef DEBUG_MODE
