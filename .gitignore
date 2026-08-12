@@ -1,2 +1,28 @@
+# Build output
 binaries/
+build/
+.pio/
+.pioenvs/
+.piolibdeps/
+*.o
+*.elf
+*.hex
+*.bin
+
+# Captured CAN traffic
 log/
+*.log
+candump-*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~

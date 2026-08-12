@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  firmware-tests:
+    name: Firmware unit and integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run the C++ test suite
+        run: make test-firmware
+
+  tool-tests:
+    name: Analysis tool tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run the tool test suite
+        run: make test-tools
+
+      - name: Check the tools are runnable end to end
+        run: |
+          printf '(1.0) slcan0 300#0000\n(1.1) slcan0 300#0000\n' > a.log
+          printf '(2.0) slcan0 300#0000\n(2.1) slcan0 300#0004\n' > b.log
+          python3 tools/candiff.py summary a.log
+          python3 tools/candiff.py diff a.log b.log
+          python3 tools/udsdecode.py raw 7F2231 || true
+
+  firmware-build:
+    name: Compile firmware (${{ matrix.board }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: uno
+            fqbn: arduino:avr:uno
+          - board: nano
+            fqbn: arduino:avr:nano
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v1
+
+      - name: Install core and library
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+          arduino-cli lib install "mcp_can@1.5.0"
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn ${{ matrix.fqbn }} \
+            --warnings all \
+            slcan_firmware_uno
+
+      - name: Compile in read-only (safety) configuration
+        run: |
+          sed -i 's/#define SLCAN_READ_ONLY 0/#define SLCAN_READ_ONLY 1/' \
+            slcan_firmware_uno/config.h
+          arduino-cli compile \
+            --fqbn ${{ matrix.fqbn }} \
+            --warnings all \
+            slcan_firmware_uno
+          git checkout slcan_firmware_uno/config.h
+
+      - name: Compile without the bitrate scanner
+        run: |
+          sed -i 's/#define SLCAN_AUTODETECT 1/#define SLCAN_AUTODETECT 0/' \
+            slcan_firmware_uno/config.h
+          arduino-cli compile \
+            --fqbn ${{ matrix.fqbn }} \
+            --warnings all \
+            slcan_firmware_uno
+
+  shell-lint:
+    name: Shell script lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck scripts/*.sh tools/*.sh
